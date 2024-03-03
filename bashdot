@@ -1,346 +1,191 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-VERSION=4.1.7
+# heavily shrinked version of https://github.com/bashdot/bashdot/blob/master/bashdot
+
+set -e
 
 current_working_dir=$(pwd)
-bashdot_config_file=$HOME/.bashdot
 
 LOGGER_FMT=${LOGGER_FMT:="%Y-%m-%d"}
 LOGGER_LVL=${LOGGER_LVL:="info"}
 
-if [ -n "$BASHDOT_LOG_LEVEL" ]; then
-    LOGGER_LVL=$BASHDOT_LOG_LEVEL
+if [ ! -z "$BASHDOT_LOG_LEVEL" ]; then
+  LOGGER_LVL=$BASHDOT_LOG_LEVEL
 fi
 
 action=$1
 
 usage() {
-    case "$1" in
-        commands)
-            echo "Usage: bashdot [dir|install|links|profiles|uninstall|version] OPTIONS"
-            ;;
-        install)
-            echo "Usage: bashdot install PROFILE1 PROFILE2 ... PROFILEN"
-            ;;
-        uninstall)
-            echo "Usage: bashdot uninstall PROFILE_DIRECTORY PROFILE"
-            ;;
-    esac
+  case "$1" in
+    commands)
+      echo "Usage: bashdot [install|before|after] OPTIONS"
+      ;;
+    install)
+      echo "Usage: bashdot install PROFILE1 PROFILE2 ... PROFILEN"
+      ;;
+    before)
+      echo "Usage: bashdot before PROFILE1 PROFILE2 ... PROFILEN"
+      ;;
+    after)
+      echo "Usage: bashdot after PROFILE1 PROFILE2 ... PROFILEN"
+      ;;
+  esac
 }
 
-if [ "$action" != "dir" ] && [ "$action" != "install" ] &&
-    [ "$action" != "links" ] && [ "$action" != "profiles" ] &&
-    [ "$action" != "uninstall" ] && [ "$action" != "version" ]; then
-    usage commands
-    exit 1
+if [ "$action" != "install" ] &&
+   [ "$action" != "before" ] &&
+   [ "$action" != "after" ]; then
+  usage commands
+  exit 1
 fi
 
 exit_if_profile_directories_contain_invalid_characters() {
-    profile_dir=$1
-    if ls "$profile_dir" | grep -E '[[:space:]:,/\]'; then
-        log error "Files in '$profile_dir' contain invalid characters."
-        exit 1
-    fi
+  profile_dir=$1
+  if ls "$profile_dir" | grep -E '[[:space:]:,/\]'; then
+    log error "Files in '$profile_dir' contain invalid characters."
+    exit 1
+  fi
 }
 
 exit_if_invalid_directory_name() {
-    dir=$1
-    if ! echo "$dir" | grep "^[/.a-zA-Z0-9_-]*$" > /dev/null; then
-        log error "Current working directory '$dir' has an invalid character. The directory you are in when you install a profile must have alpha numeric characters, with only dashes, dots or underscores."
-        exit 1
-    fi
+  dir=$1
+  if ! echo "$dir" | grep "^[/.a-zA-Z0-9_-]*$" > /dev/null; then
+    log error "Current working directory '$dir' has an invalid character. The directory you are in when you install a profile must have alpha numberic characters, with only dashes, dots or underscores."
+    exit 1
+  fi
 }
 
 exit_if_invalid_profile_name() {
-    profile=$1
-    if ! echo "$profile" | grep "^[a-zA-Z0-9_-]*$" > /dev/null; then
-        log error "Invalid profile name '$profile'. Profiles must be alpha numeric with only dashes or underscores."
-        exit 1
-    fi
+  profile=$1
+  if ! echo "$profile" | grep "^[a-zA-Z0-9_-]*$" > /dev/null; then
+    log error "Invalid profile name '$profile'. Profiles must be alpha numeric with only dashes or underscores."
+    exit 1
+  fi
 }
 
 log() {
-    action=$1 && shift
+  log_level=$1 && shift
 
-    case "$action" in
-        debug)  [[ "$LOGGER_LVL" =~ debug ]]           && echo "$( date "+${LOGGER_FMT}" ) - DEBUG - $@" 1>&2 ;;
-        info)   [[ "$LOGGER_LVL" =~ debug|info ]]      && echo "$( date "+${LOGGER_FMT}" ) - INFO - $@" 1>&2  ;;
-        warn)   [[ "$LOGGER_LVL" =~ debug|info|warn ]] && echo "$( date "+${LOGGER_FMT}" ) - WARN - $@" 1>&2  ;;
-        error)  [[ ! "$LOGGER_LVL" =~ none ]]          && echo "$( date "+${LOGGER_FMT}" ) - ERROR - $@" 1>&2 ;;
-    esac
+  case "$log_level" in
+    debug)  [[ "$LOGGER_LVL" =~ debug ]]           && echo "$( date "+${LOGGER_FMT}" ) - DEBUG - $@" 1>&2 ;;
+    info)   [[ "$LOGGER_LVL" =~ debug|info ]]      && echo "$( date "+${LOGGER_FMT}" ) - INFO - $@" 1>&2  ;;
+    warn)   [[ "$LOGGER_LVL" =~ debug|info|warn ]] && echo "$( date "+${LOGGER_FMT}" ) - WARN - $@" 1>&2  ;;
+    error)  [[ ! "$LOGGER_LVL" =~ none ]]          && echo "$( date "+${LOGGER_FMT}" ) - ERROR - $@" 1>&2 ;;
+  esac
 
-    true
-}
-
-link_dotfile() {
-    dotfile=$1
-    source_file=$2
-
-    existing=$(readlink "$dotfile")
-    log debug "Evaluating if '$dotfile' which links to '$existing' matches desired target '$source_file'."
-
-    if [ "$existing" == "$source_file" ]; then
-        log info "File '$dotfile' already links to '$source_file', continuing."
-        return
-    fi
-
-    log debug "'$dotfile' does not link to desired target '$source_file'."
-    log info "Linking '$source_file' to '$dotfile'."
-    ln -s "$source_file" "$dotfile"
+  true
 }
 
 install() {
-    profile=$1
-    profile_dir="$current_working_dir/$profile"
+  profile=$1
+  profile_dir="$current_working_dir/$profile"
+  symlinks_dir="$profile_dir/symlinks"
 
-    exit_if_profile_directories_contain_invalid_characters "$profile_dir"
+  exit_if_profile_directories_contain_invalid_characters "$profile_dir"
 
-    # Pipe separated regex (parsed by egrep, case insensitive)
-    # that will not be symlinked by bashdot
-    ignored_files='^changelog|^contributing|^dockerfile|^icon|^license|^makefile|^readme'
+  if [ ! -d "$profile_dir" ]; then
+    log error "Profile '$profile' directory does not exist."
+    exit 1
+  fi
 
-    if [ ! -d "$profile_dir" ]; then
-        log error "Profile '$profile' directory does not exist."
-        exit 1
-    fi
+  log info "Adding dotfiles profile '$profile'."
 
-    log info "Adding dotfiles profile '$profile'."
-
-    log debug "Checking for exiting conflicting dotfiles."
-    cd "$profile_dir" || exit
-    for file in $(ls |grep -E -iv "$ignored_files"); do
-        dotfile=~/."$file"
-        source_file="$profile_dir/$file"
-        if [ -e "$dotfile" ]; then
-            existing=$(readlink "$dotfile")
-
-            # Skip files which already link to the same location
-            if [ "$existing" == "$source_file" ]; then
-                continue
-            fi
-
-            log error "File '$dotfile' already exists, exiting."
-            exit 1
-        fi
-    done
-    log debug "Found no conflicting dotfiles in home, proceeding to link dotfile."
-
-    if [ -f "$bashdot_config_file" ]; then
-        if ! grep -E "^$current_working_dir$" "$bashdot_config_file" > /dev/null; then
-            log info "Appending '$current_working_dir' to bashdot config file '$bashdot_config_file'"
-            echo "$current_working_dir" >> "$bashdot_config_file"
-        fi
+  log info "Installing dotfiles from '$profile_dir'."
+  cd $symlinks_dir
+  for dir in $(ls -d */); do
+    if ls $dir/*/ &>/dev/null; then
+      for subdir in $(ls -d $dir*/); do
+        # only stow subdirectories
+        targetdir=$(basename "${subdir/dot-/.}")
+        mkdir -p "$HOME/$targetdir"
+        (cd $dir && stow $(basename "$subdir") --target "$HOME/$targetdir" --dotfiles --verbose="1")
+      done
     else
-        log info "Creating bashdot config file '$bashdot_config_file' with '$current_working_dir'."
-        echo "$current_working_dir" > "$bashdot_config_file"
+      stow "$dir" --target "$HOME" --dotfiles --verbose="1"
     fi
+  done
 
-    for skipped_file in $(ls -ad .*); do
-        if [ "$skipped_file" != ".." ] && [ "$skipped_file" != "." ]; then
-            log warn "Skipping file with dot prepended '$skipped_file'. Remove dot if file should be linked."
-        fi
-    done
-
-    # For each template, we will source it, and write the output to dev null. But send
-    # error to std out.  This will ensure that all variables are set prior running or
-    # exit with an error on the unset variable.
-    for template in $(ls |grep -E '.*\.template$'); do
-        source_file="$profile_dir/$template"
-        log info "Ensuring all variables in template '$source_file' are set."
-
-        # Eval in current environment with 'set -u' to error on unset variables
-        # For some reason both 'set -u' below are required in my testing, I'm
-        # not sure why.
-        set -u
-        eval set -u "cat <<EOF
-$(<"$source_file")
-EOF" > /dev/null
-    done
-    set +u
-    log info "All variables used in templates are set."
-
-    log info "Installing dotfiles from '$profile_dir'."
-    for file in $(ls |grep -E -iv "$ignored_files"); do
-        source_file="$profile_dir/$file"
-
-        if [[ "$source_file" == *.template ]]; then
-            rendered_file_name=$(echo "$file" | sed -e 's/^\(.*\)\.template/\1.rendered/')
-            rendered_file_path="$profile_dir/$rendered_file_name"
-
-            log info "'$source_file' is a template, rendering to '$rendered_file_path'."
-            dotfile_name=$(echo "$file" | sed -e 's/^\(.*\)\.template/\1/')
-            dotfile=~/."$dotfile_name"
-
-            # Eval in current environment to replace variables with current environment
-            eval "cat <<EOF
-$(<"$source_file")
-EOF" > "$rendered_file_path" 2> /dev/null
-
-            # Linking dotfile to rendered file path
-            link_dotfile "$dotfile" "$rendered_file_path"
-        else
-            dotfile=~/."$file"
-            link_dotfile "$dotfile" "$source_file"
-        fi
-
-    done
-
-    log info "Completed adding dotfiles profile '$profile'."
+  log info "Completed adding dotfiles profile '$profile'."
 }
 
-list_links() {
-    for file in $(ls -a ~); do
+before() {
+  profile=$1
+  profile_dir="$current_working_dir/$profile"
+  run_dir="$profile_dir/run"
+  before_dir="$run_dir/before"
 
-        # Only evaluate symlinks
-        if [[ -h ~/"$file" ]]; then
+  exit_if_profile_directories_contain_invalid_characters "$profile_dir"
 
-            # Only include if it points to the dotfiles directory
-            while IFS= read -r bashdot_dir; do
-                expected_target_file_name=$(basename "$file" | cut -c 2-)
-                if readlink ~/"$file" |grep -E "^$bashdot_dir/[a-zA-Z0-9_-]*/$expected_target_file_name(\.rendered)?$" > /dev/null; then
-                    echo "$file"
-                fi
-            done < "$bashdot_config_file"
-        fi
+  if [ ! -d "$profile_dir" ]; then
+    log error "Profile '$profile' directory does not exist."
+    exit 1
+  fi
+
+  log info "Run before scripts for dotfiles profile '$profile'."
+
+  if [ -e "$before_dir" ]; then
+    for file in $(ls "$before_dir"); do
+        log info "Run $file script."
+        (cd $before_dir && ./$file)
     done
+  else
+    log debug "$profile doesn't have before scripts"
+  fi
+
+  log info "Completed running before scripts for dotfiles profile '$profile'."
 }
 
-list_profiles() {
-    if [ ! -f "$bashdot_config_file" ];then
-        log info "No dotfiles installed by bashdot."
-    else
-        while IFS= read -r dir; do
-            for link in $(list_links); do
-                expected_target_file_name=$(basename "$link" | cut -c 2-)
-                if readlink ~/"$link" | grep -E "^$dir/[.a-zA-Z0-9_-]*/$expected_target_file_name(\.rendered)?$" > /dev/null; then
-                    profile=$(readlink ~/"$link" |sed -e "s/^.*\/[.a-zA-Z0-9_-]*\/\(.*\)\/.*$/\1/")
-                    echo "$dir $profile"
-                fi
-            done
-        done < "$bashdot_config_file" |sort |uniq
-    fi
-}
+after() {
+  profile=$1
+  profile_dir="$current_working_dir/$profile"
+  run_dir="$profile_dir/run"
+  after_dir="$run_dir/after"
 
-show_links() {
-    for link in $(list_links); do
-        dest=$(readlink ~/"$link")
-        chomped_link="${link%\\n}"
-        echo "~/$chomped_link -> $dest"
+  exit_if_profile_directories_contain_invalid_characters "$profile_dir"
+
+  if [ ! -d "$profile_dir" ]; then
+    log error "Profile '$profile' directory does not exist."
+    exit 1
+  fi
+
+  log info "Run after scripts for dotfiles profile '$profile'."
+
+  if [ -e "$after_dir" ]; then
+    for file in $(ls "$after_dir"); do
+        log info "Run $file script."
+        (cd $after_dir && ./$file)
     done
-}
+  else
+    log debug "$profile doesn't have after scripts"
+  fi
 
-dir() {
-    if [ ! -f "$bashdot_config_file" ]; then
-        log info "No dotfiles installed by bashdot."
-    else
-        sort "$bashdot_config_file"
-    fi
-}
-
-uninstall() {
-    dir=$1
-    profile=$2
-
-    if [ ! -f "$bashdot_config_file" ]; then
-        log error "Config file '$bashdot_config_file' not found."
-        log error "No dotfiles installed by bashdot."
-        exit 1
-    fi
-
-    # Don't proceed with uninstall if profiles not available in given directory
-    if ! list_profiles |grep "^$dir $profile$" > /dev/null; then
-        log error "Profile '$profile' not installed from '$dir'."
-        exit 1
-    fi
-
-    # Loop through each file and only remove if they are a symlink
-    # and point to a file in this profile in the target dir
-    for link in $(list_links);do
-        log debug "Evaluating '$link' for removal."
-        target=$(readlink ~/"$link")
-
-        # Check if link target is part of this bashdot profile
-        expected_target_file_name=$(basename "$link" | cut -c 2-)
-        if echo "$target" |grep -E "^$dir/$profile/${expected_target_file_name}(\.rendered)?$" > /dev/null; then
-            # If a link target was rendered from a template, remove
-            # the rendered file on uninstall
-            if echo "$target" |grep -E '\.rendered$' > /dev/null; then
-                log info "Removing rendered file '$target'."
-                \rm "$target"
-            fi
-
-            log info "Removing '$link'."
-            \rm ~/"$link"
-        fi
-    done
-    log debug "All links for profile '$profile' removed."
-
-    # If no more profiles point to this directory, remove it
-    log debug "Updating bashdot config file '$bashdot_config_file'."
-    dir_empty=true
-    for link in $(list_links); do
-        log debug "Evaluating if '$link' is part of a bashdot profile in dir '$dir'."
-        expected_target_file_name=$(basename "$link" | cut -c 2-)
-        if readlink ~/"$link" |grep -E "^$dir/[a-zA-Z0-9_-]*/${expected_target_file_name}(\.rendered)?$" > /dev/null; then
-            log debug "'$link' is part of a bashdot profile in '$dir', not removing '$dir' from '$bashdot_config_file'."
-            dir_empty=false
-            break
-        fi
-    done
-
-    if [ "$dir_empty" = true ]; then
-        log info "Removing '$dir' from '$bashdot_config_file'."
-        mv "$bashdot_config_file" "${bashdot_config_file}".backup
-        grep -v "^$dir$" < "${bashdot_config_file}".backup > "$bashdot_config_file"
-    fi
-
-    # If there are no more bashdot profiles, remove .bashdot and backup
-    if [ ! -s "$bashdot_config_file" ]; then
-        log info "No more bashdot profiles installed, removing '$bashdot_config_file'."
-        \rm -f "$bashdot_config_file" "${bashdot_config_file}".backup
-    fi
+  log info "Completed running after scripts for dotfiles profile '$profile'."
 }
 
 case "$action" in
-    dir)
-        dir
-        ;;
-    install)
-        if [ $# -lt 2 ]; then
-            usage install
-            exit 1
-        fi
+  install)
+    ;&
+  before)
+    ;&
+  after)
+    if [ $# -lt 2 ]; then
+      usage $action
+      exit 1
+    fi
 
-        exit_if_invalid_directory_name "$current_working_dir"
+    exit_if_invalid_directory_name "$current_working_dir"
 
-        while true; do
-            shift
+    while true; do
+      shift
 
-            if [ -z "$1" ];then
-                break
-            fi
+      if [ -z "$1" ];then
+        break
+      fi
 
-            exit_if_invalid_profile_name "$1"
-            install "$1"
-        done
+      exit_if_invalid_profile_name "$1"
+      $action "$1"
+    done
 
-        log info "Completed installation of all profiles successfully."
-        ;;
-    links)
-        show_links
-        ;;
-    profiles)
-        list_profiles
-        ;;
-    uninstall)
-        if [ $# -ne 3 ]; then
-            usage uninstall
-            exit 1
-        fi
-        uninstall "$2" "$3"
-        log info "Completed uninstallation successfully."
-        ;;
-    version)
-        echo "$VERSION"
-        ;;
+    log info "Completed '$action' of all profiles succesfully."
+    ;;
 esac
